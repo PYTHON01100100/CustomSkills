@@ -1,12 +1,12 @@
 ---
 name: global-Islamic-utils
-description: Global Islamic calendar and prayer utility. Handles prayer times, Qiyam al-Layl, Hijri↔Gregorian conversion, Eid al-Fitr, Eid al-Adha, Yawm Arafah, hilal moon sighting (country-specific announced dates), day virtues, and Google News lookups. Works for any city and country worldwide.
+description: Global Islamic calendar and prayer utility. Handles prayer times, Qiyam al-Layl, Hijri↔Gregorian conversion, Eid al-Fitr, Eid al-Adha, Yawm Arafah, Yawm Ashura, hilal moon sighting (country-specific announced dates), day virtues, and Google News lookups. Works for any city and country worldwide.
 user-invocable: true
 ---
 
 # Global Islamic Utils
 
-Use this skill when the user asks about prayer times, Islamic dates, Qiyam, Eid, Yawm Arafah, hilal moon sighting, or the Islamic significance of a day — for any city or country worldwide.
+Use this skill when the user asks about prayer times, Islamic dates, Qiyam, Eid, Yawm Arafah, Yawm Ashura, hilal moon sighting, or the Islamic significance of a day — for any city or country worldwide.
 
 ## Key principle: hilal-aware dates
 
@@ -66,7 +66,7 @@ python scripts/islamic_faith_utils.py day-info --city Riyadh
 python scripts/islamic_faith_utils.py day-info --city Cairo --country Egypt --date 13-03-2026
 ```
 
-Returns: `weekday_en`, `weekday_ar`, `gregorian`, `hijri`, `virtues` (list), `recommended_acts` (list), `prayer_times`
+Returns: `city`, `country`, `gregorian`, `hijri`, `weekday_en`, `weekday_ar`, `virtues` (list), `recommended_acts` (list), `prayer_times`
 
 Example virtues output for Friday:
 - "The best day on which the sun rises is Friday. (Muslim)"
@@ -88,7 +88,7 @@ python scripts/islamic_faith_utils.py qiyam --city Riyadh
 python scripts/islamic_faith_utils.py qiyam --city Istanbul --country Turkey --date 20-03-2026
 ```
 
-Returns: `maghrib`, `isha`, `fajr_next_day`, `night_duration`, `last_third_starts`, `last_third_ends_at_fajr`
+Returns: `city`, `country`, `date`, `maghrib`, `isha`, `fajr_next_day`, `night_duration`, `last_third_starts`, `last_third_ends_at_fajr`, `note`
 
 ---
 
@@ -120,7 +120,7 @@ python scripts/islamic_faith_utils.py hilal --country Morocco --month dhulhijja 
 
 Valid month keys: `muharram`, `safar`, `rabiulawal`, `rabiulakhir`, `jumadalawal`, `jumadalakhir`, `rajab`, `shaban`, `ramadan`, `shawwal`, `dhulqada`, `dhulhijja`
 
-Returns: `calculated_start_gregorian`, `hilal_eve_gregorian` (29th of prev month), `announced_start_gregorian` (from news, or null), `date_used`, `date_status`, `announcement_source`, `moon_sighting_news`
+Returns: `country`, `month`, `month_ar`, `hijri_year`, `calculated_start_gregorian`, `hilal_eve_gregorian` (29th of prev month), `announced_start_gregorian` (from news, or null), `date_used`, `date_status`, `moon_sighting_news` — plus `announcement_source` and `announcement_link` when an announcement is found
 
 **Example showing country difference:**
 - Saudi Arabia: `announced=20-03-2026` (Eid Wednesday)
@@ -139,7 +139,7 @@ python scripts/islamic_faith_utils.py eid-prayer --city Damascus --country Syria
 python scripts/islamic_faith_utils.py eid-prayer --city Cairo --country Egypt --eid adha
 ```
 
-Returns: `eid`, `calculated_date`, `announced_date`, `date_used`, `date_status`, `estimated_prayer_time`, `prayer_basis`, `announcement_source`, `announcement_link`, `supporting_news_results`
+Returns: `city`, `country`, `eid`, `calculated_date`, `announced_date`, `date_used`, `date_status`, `estimated_prayer_time`, `prayer_basis`, `supporting_news_results` — plus `announcement_source` and `announcement_link` when an announcement is found
 
 **Important:** Prayer time is estimated as Sunrise + 15 minutes on `date_used`. Always verify with the local mosque or official announcement.
 
@@ -155,9 +155,27 @@ python scripts/islamic_faith_utils.py arafah --city Jakarta --country Indonesia
 python scripts/islamic_faith_utils.py arafah --city London --country "United Kingdom" --year 2026
 ```
 
-Returns: `event`, `hijri_date`, `calculated_date`, `announced_date`, `date_used`, `date_status`, `weekday_en`, `weekday_ar`, `fasting_virtue`, `note`, `prayer_times`, `announcement_source`
+Returns: `city`, `country`, `event`, `hijri_date`, `calculated_date`, `announced_date`, `date_used`, `date_status`, `weekday_en`, `weekday_ar`, `fasting_virtue`, `note`, `prayer_times` — plus `announcement_source` and `announcement_link` when an announcement is found
 
 **Fasting virtue:** Fasting on Arafah expiates the sins of the previous and coming year. (Muslim 1162) — for non-pilgrims only.
+
+---
+
+### ashura — Yawm Ashura (10th Muharram)
+
+Returns the date of Yawm Ashura, its fasting virtue, the recommended Tasu'a (9th Muharram) fast, and prayer times. Unlike Arafah, Ashura follows the **country's own Muharram hilal announcement**.
+
+```bash
+python scripts/islamic_faith_utils.py ashura --city Riyadh
+python scripts/islamic_faith_utils.py ashura --city Damascus --country Syria --year 2026
+python scripts/islamic_faith_utils.py ashura --city London --country "United Kingdom"
+```
+
+Returns: `city`, `country`, `event`, `hijri_date`, `calculated_date`, `calculated_tasua`, `announced_date`, `announced_tasua`, `date_used`, `date_status`, `weekday_en`, `weekday_ar`, `fasting_virtue`, `tasua_note`, `note`, `prayer_times` — plus `announcement_source` and `announcement_link` when an announcement is found
+
+**Fasting virtue:** Fasting on Ashura expiates the sins of the previous year. (Muslim 1162)
+
+**Tasu'a (9th Muharram):** The Prophet ﷺ intended to fast the 9th as well to differ from Jewish practice. Fasting both days is recommended. (Muslim 1134)
 
 ---
 
@@ -180,7 +198,7 @@ Returns the next Yawm Arafah, Eid al-Fitr, and Eid al-Adha sorted by date — th
 
 ```bash
 python scripts/islamic_faith_utils.py next-events --city Riyadh
-python scripts/islamic_faith_utils.py next-events --city Kuala Lumpur --country Malaysia
+python scripts/islamic_faith_utils.py next-events --city "Kuala Lumpur" --country Malaysia
 ```
 
 Example output:
@@ -246,6 +264,13 @@ python scripts/islamic_faith_utils.py read "https://spa.gov.sa/article" --max-ch
 2. Mention the fasting virtue (expiates two years of sins — for non-pilgrims).
 3. Note that the date follows Saudi Arabia's announcement regardless of country.
 
+### When a user asks about Yawm Ashura
+1. Run `ashura`.
+2. Report `date_used` as the Ashura date and `announced_tasua` (or `calculated_tasua`) as the recommended Tasu'a fast date.
+3. Mention the fasting virtue (expiates one year of sins).
+4. Recommend fasting both the 9th and 10th — note that `tasua_note` explains the reasoning.
+5. Check `date_status`: if unconfirmed, say the date is calculated and may differ by country.
+
 ### When a user asks when Ramadan or a Hijri month starts in a specific country
 1. Run `hilal --country <country> --month <month>`.
 2. If `announced_start_gregorian` is found: present it as the confirmed date with the source.
@@ -310,6 +335,13 @@ python scripts/islamic_faith_utils.py read "https://spa.gov.sa/article" --max-ch
 - "متى يوم عرفة 2026؟"
 - "When is Yawm Arafah? Should I fast?"
 - "يوم عرفة 1447 كم يوافق ميلادي؟"
+
+**Ashura:**
+- "متى يوم عاشوراء 2026؟"
+- "When is Ashura? Should I fast?"
+- "متى صيام عاشوراء وتاسوعاء؟"
+- "Ashura date in Turkey 2026"
+- "فضل صيام يوم عاشوراء"
 
 **All upcoming events:**
 - "ما هي المناسبات الإسلامية القادمة؟"

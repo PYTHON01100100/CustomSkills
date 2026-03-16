@@ -16,6 +16,49 @@ from bs4 import BeautifulSoup
 DEFAULT_TIMEOUT = 20
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 ALADHAN_BASE = "https://api.aladhan.com/v1"
+NOMINATIM_BASE = "https://nominatim.openstreetmap.org/search"
+
+# Calculation method per country (AlAdhan method IDs).
+# Default fallback: 3 = Muslim World League.
+COUNTRY_METHOD: Dict[str, int] = {
+    "saudi arabia": 4,   # Umm al-Qura
+    "makkah": 4,
+    "egypt": 5,          # Egyptian General Authority of Survey
+    "syria": 5,
+    "sudan": 5,
+    "libya": 5,
+    "jordan": 23,        # Ministry of Awqaf Jordan
+    "kuwait": 9,
+    "qatar": 10,
+    "uae": 16,
+    "united arab emirates": 16,
+    "turkey": 13,
+    "russia": 14,
+    "malaysia": 17,
+    "indonesia": 20,
+    "tunisia": 18,
+    "algeria": 19,
+    "morocco": 21,
+    "singapore": 11,
+    "france": 12,
+    "portugal": 22,
+    "united states": 2,   # ISNA — Islamic Society of North America
+    "usa": 2,
+    "us": 2,
+    "canada": 2,
+    "united kingdom": 15, # Moonsighting Committee Worldwide
+    "uk": 15,
+    "germany": 3,
+    "iraq": 5,
+    "lebanon": 5,
+    "palestine": 5,
+    "pakistan": 1,        # University of Islamic Sciences, Karachi
+    "bangladesh": 1,
+    "india": 1,
+}
+
+# Simple in-memory geocode cache to avoid duplicate Nominatim calls
+_geocode_cache: Dict[str, tuple] = {}
 
 # Gregorian month name → number, used for date extraction from news text
 GREG_MONTHS_EN: Dict[str, int] = {
@@ -214,6 +257,32 @@ def normalize_city(city: str) -> str:
     return CITY_ALIASES.get(key, city.strip())
 
 
+def _method_for_country(country: str) -> int:
+    return COUNTRY_METHOD.get(country.strip().lower(), 3)
+
+
+def _geocode(city: str, country: str) -> tuple:
+    """Return (lat, lng) for a city using Nominatim. Raises SkillError on failure."""
+    cache_key = f"{city.lower()}|{country.lower()}"
+    if cache_key in _geocode_cache:
+        return _geocode_cache[cache_key]
+    params = {
+        "q": f"{city}, {country}",
+        "format": "json",
+        "limit": 1,
+        "accept-language": "en",
+    }
+    r = _session().get(NOMINATIM_BASE, params=params, timeout=DEFAULT_TIMEOUT)
+    r.raise_for_status()
+    results = r.json()
+    if not results:
+        raise SkillError(f"Location not found: '{city}, {country}'. Try a different city name.")
+    lat = float(results[0]["lat"])
+    lng = float(results[0]["lon"])
+    _geocode_cache[cache_key] = (lat, lng)
+    return lat, lng
+
+
 def request_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     r = _session().get(url, params=params, timeout=DEFAULT_TIMEOUT)
     r.raise_for_status()
@@ -225,13 +294,19 @@ def request_json(url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str,
 
 
 def timings_by_city(city: str, country: str = "Saudi Arabia", date: Optional[str] = None) -> Dict[str, Any]:
+    """Fetch prayer timings using accurate coordinates from Nominatim geocoding.
+
+    Uses /timings/{date}?latitude=&longitude= instead of /timingsByCity because
+    the timingsByCity endpoint has known geocoding errors (e.g. Damascus returns
+    coordinates in West Africa instead of Syria).
+    """
     city = normalize_city(city)
     country = country.strip()
     date = date or dt.date.today().strftime("%d-%m-%Y")
-    url = f"{ALADHAN_BASE}/timingsByCity/{date}"
-    # iso8601 intentionally omitted: API returns "HH:MM (TZ)" strings that _extract_time handles.
-    # Enabling iso8601=True would break strptime("%H:%M") parsing used throughout this file.
-    params = {"city": city, "country": country, "method": 4, "school": 1}
+    lat, lng = _geocode(city, country)
+    method = _method_for_country(country)
+    url = f"{ALADHAN_BASE}/timings/{date}"
+    params = {"latitude": lat, "longitude": lng, "method": method, "school": 0}
     return request_json(url, params=params)
 
 
@@ -755,6 +830,92 @@ def get_arafah_day(city: str, country: str = "Saudi Arabia", year: Optional[int]
     return result
 
 
+def get_ashura_day(city: str, country: str = "Saudi Arabia", year: Optional[int] = None) -> Dict[str, Any]:
+    """
+    Return Yawm Ashura (10th Muharram) date and prayer times.
+
+    Ashura follows the country's own Muharram hilal announcement (unlike Arafah
+    which always follows Saudi Arabia). We search for the announced start of
+    Muharram 1 in the given country and derive Ashura = Muharram 1 + 9 days.
+    """
+    year = year or dt.date.today().year
+    hijri_year = _hijri_year_for(year, 1)  # Muharram is month 1
+    _, muharram_ar = HIJRI_MONTHS["muharram"]
+
+    # Calculated dates
+    calc_muharram1_str = hijri_to_gregorian(1, 1, hijri_year)["data"]["gregorian"]["date"]
+    calc_ashura_str    = hijri_to_gregorian(10, 1, hijri_year)["data"]["gregorian"]["date"]
+    calc_tasua_str     = hijri_to_gregorian(9, 1, hijri_year)["data"]["gregorian"]["date"]
+    calc_muharram1 = dt.datetime.strptime(calc_muharram1_str, "%d-%m-%Y").date()
+
+    # Search for the announced start of Muharram in the given country
+    announcement = _search_announced_start(
+        country=country,
+        month_ar=muharram_ar,
+        hijri_year=hijri_year,
+        calc_date=calc_muharram1,
+        gregorian_year=year,
+        extra_terms=[
+            f"رؤية هلال محرم {hijri_year} {country}",
+            f"Muharram {year} {country} moon sighting date",
+            f"Ashura {year} {country} date",
+        ],
+    )
+
+    if announcement:
+        found = dt.datetime.strptime(announcement["announced_date"], "%d-%m-%Y").date()
+        # Derive Ashura and Tasu'a from the announced Muharram 1
+        announced_ashura = (found + dt.timedelta(days=9)).strftime("%d-%m-%Y")
+        announced_tasua  = (found + dt.timedelta(days=8)).strftime("%d-%m-%Y")
+        date_used_str = announced_ashura
+        date_status = f"announced ({country})"
+    else:
+        announced_ashura = None
+        announced_tasua  = None
+        date_used_str = calc_ashura_str
+        date_status = "calculated (Umm al-Qura — unconfirmed)"
+
+    prayer = get_prayer_summary(city, country=country, date=date_used_str)
+    result: Dict[str, Any] = {
+        "city": normalize_city(city),
+        "country": country,
+        "event": "Yawm Ashura (Day of Ashura)",
+        "hijri_date": f"10 Muharram {hijri_year}H",
+        "calculated_date": calc_ashura_str,
+        "calculated_tasua": calc_tasua_str,
+        "announced_date": announced_ashura,
+        "announced_tasua": announced_tasua,
+        "date_used": date_used_str,
+        "date_status": date_status,
+        "weekday_en": prayer["weekday_en"],
+        "weekday_ar": prayer.get("weekday_ar", ""),
+        "fasting_virtue": (
+            "Fasting on the Day of Ashura expiates the sins of the previous year. "
+            "(Muslim 1162)"
+        ),
+        "tasua_note": (
+            "The Prophet \ufdfa intended to fast on the 9th (Tasu'a) as well to differ "
+            "from the Jewish practice of fasting only on the 10th. (Muslim 1134) — "
+            "Fasting both the 9th and 10th is recommended."
+        ),
+        "note": (
+            "Ashura date follows the official Muharram hilal announcement for the given country."
+        ),
+        "prayer_times": {
+            "fajr": prayer["fajr"],
+            "sunrise": prayer["sunrise"],
+            "dhuhr": prayer["dhuhr"],
+            "asr": prayer["asr"],
+            "maghrib": prayer["maghrib"],
+            "isha": prayer["isha"],
+        },
+    }
+    if announcement:
+        result["announcement_source"] = announcement["source"]
+        result["announcement_link"] = announcement["link"]
+    return result
+
+
 def next_eid(city: str, country: str = "Saudi Arabia") -> Dict[str, Any]:
     today = dt.date.today()
     for year in (today.year, today.year + 1):
@@ -792,11 +953,11 @@ def next_islamic_events(city: str, country: str = "Saudi Arabia") -> List[Dict[s
                     "country": item["country"],
                 }))
         arafah = get_arafah_day(city, country=country, year=year)
-        d = dt.datetime.strptime(arafah["gregorian_date"], "%d-%m-%Y").date()
+        d = dt.datetime.strptime(arafah["date_used"], "%d-%m-%Y").date()
         if d >= today:
             events.append((d, {
                 "event": arafah["event"],
-                "gregorian_date": arafah["gregorian_date"],
+                "gregorian_date": arafah["date_used"],
                 "hijri_date": arafah["hijri_date"],
                 "fasting_virtue": arafah["fasting_virtue"],
                 "days_until": (d - today).days,
@@ -872,6 +1033,10 @@ def cmd_arafah(args: argparse.Namespace) -> None:
     print_json(get_arafah_day(city=args.city, country=args.country, year=args.year))
 
 
+def cmd_ashura(args: argparse.Namespace) -> None:
+    print_json(get_ashura_day(city=args.city, country=args.country, year=args.year))
+
+
 def cmd_next_events(args: argparse.Namespace) -> None:
     print_json(next_islamic_events(city=args.city, country=args.country))
 
@@ -933,6 +1098,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_arafah.add_argument("--year", type=int, help="Gregorian year (defaults to current year)")
     p_arafah.set_defaults(func=cmd_arafah)
 
+    p_ashura = sub.add_parser("ashura", help="Get Yawm Ashura (10th Muharram) date, fasting virtue, and prayer times")
+    p_ashura.add_argument("--city", default="Riyadh")
+    p_ashura.add_argument("--country", default="Saudi Arabia")
+    p_ashura.add_argument("--year", type=int, help="Gregorian year (defaults to current year)")
+    p_ashura.set_defaults(func=cmd_ashura)
+
     p_events = sub.add_parser("next-events", help="Next 3 upcoming Islamic events: Yawm Arafah, Eid al-Fitr, Eid al-Adha")
     p_events.add_argument("--city", default="Riyadh")
     p_events.add_argument("--country", default="Saudi Arabia")
@@ -952,7 +1123,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_hilal.add_argument("--year", type=int, help="Gregorian year (defaults to current year)")
     p_hilal.set_defaults(func=cmd_hilal)
 
-    p_news = sub.add_parser("news", help="Search news/web via DuckDuckGo HTML")
+    p_news = sub.add_parser("news", help="Search Google News RSS (Arabic or English auto-detected)")
     p_news.add_argument("query")
     p_news.add_argument("--max-results", type=int, default=5, dest="max_results")
     p_news.add_argument("--site", help="Optional site filter, e.g. spa.gov.sa")
